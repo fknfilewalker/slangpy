@@ -418,7 +418,7 @@ nb::object NativeCallData::find_torch_tensors_recurse(nb::object arg, nb::list& 
         // Read access from pre-built list
         if (access_idx >= m_autograd_access_list.size()) {
             throw std::runtime_error(
-                "Autograd access list index out of bounds — "
+                "Autograd access list index out of bounds - "
                 "argument structure doesn't match build-time bindings."
             );
         }
@@ -575,7 +575,15 @@ nb::tuple NativeCallData::autograd_backward(
     nb::kwargs bwds_kwargs = nb::borrow<nb::kwargs>(kwargs);
     nb::cast<NativeFunctionNode*>(function_node)->call_bwds(this, bwds_args, bwds_kwargs);
 
-    // Return input gradients as tuple
+    // Clear tensor refs from pairs to free VRAM between iterations.
+    // Pairs survive as metadata containers; next backward call (if retain_graph=True)
+    // restores them from saved_tensors. Mirrors autograd_forward's cleanup.
+    for (size_t i = 0; i < num_pairs; i++) {
+        auto* pair = nb::cast<NativeTorchTensorDiffPair*>(pairs[i]);
+        pair->primal = nb::none();
+        pair->grad = nb::none();
+    }
+
     return nb::tuple(input_grads);
 }
 
