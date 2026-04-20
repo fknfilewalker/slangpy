@@ -67,15 +67,15 @@ static void setup_style()
     colors[ImGuiCol_Tab] = ImVec4(0.11f, 0.15f, 0.17f, 1.00f);
     colors[ImGuiCol_TabHovered] = ImVec4(0.26f, 0.59f, 0.98f, 0.80f);
     colors[ImGuiCol_TabActive] = ImVec4(0.20f, 0.25f, 0.29f, 1.00f);
-    colors[ImGuiCol_TabUnfocused] = ImVec4(0.11f, 0.15f, 0.17f, 1.00f);
-    colors[ImGuiCol_TabUnfocusedActive] = ImVec4(0.11f, 0.15f, 0.17f, 1.00f);
+    colors[ImGuiCol_TabDimmed] = ImVec4(0.11f, 0.15f, 0.17f, 1.00f);
+    colors[ImGuiCol_TabDimmedSelected] = ImVec4(0.11f, 0.15f, 0.17f, 1.00f);
     colors[ImGuiCol_PlotLines] = ImVec4(0.61f, 0.61f, 0.61f, 1.00f);
     colors[ImGuiCol_PlotLinesHovered] = ImVec4(1.00f, 0.43f, 0.35f, 1.00f);
     colors[ImGuiCol_PlotHistogram] = ImVec4(0.90f, 0.70f, 0.00f, 1.00f);
     colors[ImGuiCol_PlotHistogramHovered] = ImVec4(1.00f, 0.60f, 0.00f, 1.00f);
     colors[ImGuiCol_TextSelectedBg] = ImVec4(0.26f, 0.59f, 0.98f, 0.35f);
     colors[ImGuiCol_DragDropTarget] = ImVec4(1.00f, 1.00f, 0.00f, 0.90f);
-    colors[ImGuiCol_NavHighlight] = ImVec4(0.26f, 0.59f, 0.98f, 1.00f);
+    colors[ImGuiCol_NavCursor] = ImVec4(0.26f, 0.59f, 0.98f, 1.00f);
     colors[ImGuiCol_NavWindowingHighlight] = ImVec4(1.00f, 1.00f, 1.00f, 0.70f);
     colors[ImGuiCol_NavWindowingDimBg] = ImVec4(0.80f, 0.80f, 0.80f, 0.20f);
     colors[ImGuiCol_ModalWindowDimBg] = ImVec4(0.80f, 0.80f, 0.80f, 0.35f);
@@ -254,8 +254,10 @@ Context::Context(ref<Device> device)
 
     ImGuiIO& io = ImGui::GetIO();
     io.UserData = this;
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavNoCaptureKeyboard;
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures;
     io.IniFilename = nullptr;
+    io.ConfigNavCaptureKeyboard = false;
 
     float scale_factor = platform::display_scale_factor();
 
@@ -307,29 +309,6 @@ Context::Context(ref<Device> device)
     // Setup program.
     m_program = m_device->load_program("sgl/ui/imgui.slang", {"vs_main", "fs_main"});
 
-    // Setup font texture.
-    {
-        uint8_t* pixels;
-        int width;
-        int height;
-        io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
-        SubresourceData data[1] = {{
-            .data = pixels,
-            .size = size_t(width * height * 4),
-            .row_pitch = size_t(width * 4),
-            .slice_pitch = size_t(width * height * 4),
-        }};
-        m_font_texture = m_device->create_texture({
-            .format = Format::rgba8_unorm,
-            .width = narrow_cast<uint32_t>(width),
-            .height = narrow_cast<uint32_t>(height),
-            .usage = TextureUsage::shader_resource,
-            .data = data,
-        });
-
-        io.Fonts->SetTexID(static_cast<ImTextureID>(m_font_texture.get()));
-    }
-
     // Setup vertex layout.
     m_input_layout = m_device->create_input_layout({
         .input_elements{
@@ -345,6 +324,14 @@ Context::Context(ref<Device> device)
 
 Context::~Context()
 {
+    ImGui::SetCurrentContext(m_imgui_context);
+    for (ImTextureData* tex : ImGui::GetPlatformIO().Textures) {
+        if (tex->Status != ImTextureStatus_Destroyed) {
+            tex->SetTexID(ImTextureID_Invalid);
+            tex->SetStatus(ImTextureStatus_Destroyed);
+        }
+    }
+    m_textures.clear();
     ImGui::DestroyContext(m_imgui_context);
 }
 
@@ -382,6 +369,12 @@ void Context::end_frame(TextureView* texture_view, CommandEncoder* command_encod
         return;
 
     ImDrawData* draw_data = ImGui::GetDrawData();
+
+    // Update textures.
+    if (draw_data->Textures != nullptr)
+        for (ImTextureData* tex : *draw_data->Textures)
+            if (tex->Status != ImTextureStatus_OK)
+                update_texture(tex);
 
     if (draw_data->CmdListsCount > 0) {
         // Cycle through vertex & index buffers.
@@ -495,9 +488,9 @@ bool Context::handle_keyboard_event(const KeyboardEvent& event)
     ImGui::SetCurrentContext(m_imgui_context);
     ImGuiIO& io = ImGui::GetIO();
 
-    io.AddKeyEvent(ImGuiKey_ModShift, event.has_modifier(KeyModifier::shift));
-    io.AddKeyEvent(ImGuiKey_ModCtrl, event.has_modifier(KeyModifier::ctrl));
-    io.AddKeyEvent(ImGuiKey_ModAlt, event.has_modifier(KeyModifier::alt));
+    io.AddKeyEvent(ImGuiMod_Shift, event.has_modifier(KeyModifier::shift));
+    io.AddKeyEvent(ImGuiMod_Ctrl, event.has_modifier(KeyModifier::ctrl));
+    io.AddKeyEvent(ImGuiMod_Alt, event.has_modifier(KeyModifier::alt));
 
     switch (event.type) {
     case KeyboardEventType::key_press:
@@ -519,9 +512,9 @@ bool Context::handle_mouse_event(const MouseEvent& event)
     ImGui::SetCurrentContext(m_imgui_context);
     ImGuiIO& io = ImGui::GetIO();
 
-    io.AddKeyEvent(ImGuiKey_ModShift, event.has_modifier(KeyModifier::shift));
-    io.AddKeyEvent(ImGuiKey_ModCtrl, event.has_modifier(KeyModifier::ctrl));
-    io.AddKeyEvent(ImGuiKey_ModAlt, event.has_modifier(KeyModifier::alt));
+    io.AddKeyEvent(ImGuiMod_Shift, event.has_modifier(KeyModifier::shift));
+    io.AddKeyEvent(ImGuiMod_Ctrl, event.has_modifier(KeyModifier::ctrl));
+    io.AddKeyEvent(ImGuiMod_Alt, event.has_modifier(KeyModifier::alt));
 
     switch (event.type) {
     case MouseEventType::button_down:
@@ -572,6 +565,34 @@ RenderPipeline* Context::get_pipeline(Format format)
     return pipeline;
 }
 
+void Context::update_texture(ImTextureData* tex)
+{
+    if (tex->Status == ImTextureStatus_WantCreate || tex->Status == ImTextureStatus_WantUpdates) {
+        SGL_ASSERT(tex->Format == ImTextureFormat_RGBA32);
+        SubresourceData data[1] = {{
+            .data = tex->GetPixels(),
+            .size = size_t(tex->GetSizeInBytes()),
+            .row_pitch = size_t(tex->GetPitch()),
+            .slice_pitch = size_t(tex->GetSizeInBytes()),
+        }};
+        ref<Texture> gpu_texture = m_device->create_texture({
+            .format = Format::rgba8_unorm,
+            .width = narrow_cast<uint32_t>(tex->Width),
+            .height = narrow_cast<uint32_t>(tex->Height),
+            .usage = TextureUsage::shader_resource,
+            .data = data,
+        });
+        m_textures[tex] = gpu_texture;
+        tex->SetTexID(gpu_texture);
+        tex->SetStatus(ImTextureStatus_OK);
+    }
+    if (tex->Status == ImTextureStatus_WantDestroy && tex->UnusedFrames > 0) {
+        m_textures.erase(tex);
+        tex->SetTexID(ImTextureID_Invalid);
+        tex->SetStatus(ImTextureStatus_Destroyed);
+    }
+}
+
 } // namespace sgl::ui
 
 namespace ImGui {
@@ -579,7 +600,7 @@ namespace ImGui {
 void PushFont(const char* name)
 {
     sgl::ui::Context* ctx = static_cast<sgl::ui::Context*>(ImGui::GetIO().UserData);
-    PushFont(ctx->get_font(name));
+    PushFont(ctx->get_font(name), 0.f);
 }
 
 } // namespace ImGui
