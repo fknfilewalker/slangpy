@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+import sys
 import pytest
+import slangpy as spy
 from slangpy import platform
 
 
@@ -30,6 +32,12 @@ def test_memory():
     stats = platform.memory_stats()
     assert stats.rss > 0
     assert stats.peak_rss > 0
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Wayland handles are Linux only")
+def test_window_handle_wayland():
+    assert isinstance(spy.WindowHandle(wayland_display=1, wayland_surface=2), spy.WindowHandle)
+    assert isinstance(spy.WindowHandle(xdisplay=1, xwindow=2), spy.WindowHandle)
 
 
 if __name__ == "__main__":
